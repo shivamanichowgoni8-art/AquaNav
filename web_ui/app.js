@@ -432,7 +432,7 @@
   }
 
   // Lightweight browser-side spectral surface analyzer (Oil Sheen, Emulsified Oil, Algae)
-  function analyzeSurfaceSpectral(sourceEl, frameW, frameH, excludeBoxes) {
+  function analyzeSurfaceSpectral(sourceEl, frameW, frameH, excludeBoxes, requireWaterGate = false) {
     const sw = spectralCanvas.width;
     const sh = spectralCanvas.height;
     try {
@@ -465,7 +465,9 @@
     let cyanSlickPx = 0;
     let tanSlickPx = 0;
     let algaePx = 0;
-    let waterBlueGreenPx = 0;
+    let lowerWaterPx = 0;
+    let lowerValidPx = 0;
+    const lowerYStart = Math.floor(sh * 0.40);
 
     // Bounding boxes for coarse surface detections
     const bounds = {
@@ -496,6 +498,27 @@
       vals[i] = max;
     }
 
+    if (requireWaterGate) {
+      for (let y = lowerYStart; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const i = y * sw + x;
+          if (excluded[i]) continue;
+          lowerValidPx++;
+          const h = hues[i];
+          const s = sats[i];
+          const v = vals[i];
+          // Marine blue, cyan, turquoise, or murky pond green
+          if (h >= 150 && h <= 245 && s >= 0.14 && v >= 0.18) {
+            lowerWaterPx++;
+          }
+        }
+      }
+      const waterRatio = lowerValidPx > 0 ? (lowerWaterPx / lowerValidPx) * 100 : 0;
+      if (waterRatio < 30.0) {
+        return { oilPct: 0, algaePct: 0, algaeStatus: 'CLEAR', surfaceBoxes: [] };
+      }
+    }
+
     for (let y = 2; y < sh - 2; y++) {
       for (let x = 2; x < sw - 2; x++) {
         const i = y * sw + x;
@@ -507,10 +530,6 @@
 
         // Skip specular glare & deep dark shadow
         if ((v > 0.96 && s < 0.1) || v < 0.16) continue;
-
-        if (h >= 165 && h <= 225 && s >= 0.12) {
-          waterBlueGreenPx++;
-        }
 
         // Emulsified milky cyan slick (H 170-220, S 0.12-0.46, V 0.45-0.90)
         if (h >= 172 && h <= 220 && s >= 0.12 && s <= 0.46 && v >= 0.45 && v <= 0.90) {
@@ -891,13 +910,16 @@
               .then((preds) => {
                 lastLatencyMs = performance.now() - t0;
                 const filtered = filterAndMapPredictions(preds, w, h);
-                latestLiveDetections = trackBuffer.updateAndFilter(filtered, w, h);
-                const analytics = evaluateSceneAnalytics(latestLiveDetections, {
-                  oilPct: 0,
-                  algaePct: 0,
-                  algaeStatus: 'CLEAR',
-                  surfaceBoxes: [],
-                });
+                const tracked = trackBuffer.updateAndFilter(filtered, w, h);
+                const spectral = analyzeSurfaceSpectral(
+                  webcamVideo,
+                  w,
+                  h,
+                  tracked.map((d) => d.box),
+                  true
+                );
+                latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
+                const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
                 maybeDispatchAutonomousCommand(analytics.recCmd);
               })
               .catch((err) => console.warn('Webcam detect error:', err))
@@ -961,13 +983,16 @@
           if (cocoModel) {
             const preds = await cocoModel.detect(visionCanvas, 20, BOOSTED_MIN_CONF);
             const filtered = filterAndMapPredictions(preds, w, h);
-            latestLiveDetections = trackBuffer.updateAndFilter(filtered, w, h);
-            const analytics = evaluateSceneAnalytics(latestLiveDetections, {
-              oilPct: 0,
-              algaePct: 0,
-              algaeStatus: 'CLEAR',
-              surfaceBoxes: [],
-            });
+            const tracked = trackBuffer.updateAndFilter(filtered, w, h);
+            const spectral = analyzeSurfaceSpectral(
+              visionCanvas,
+              w,
+              h,
+              tracked.map((d) => d.box),
+              true
+            );
+            latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
+            const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
             maybeDispatchAutonomousCommand(analytics.recCmd);
             drawHudOverlay(visionCtx, w, h, latestLiveDetections, analytics.targetLock);
           }
