@@ -913,13 +913,15 @@
                 lastLatencyMs = performance.now() - t0;
                 const filtered = filterAndMapPredictions(preds, w, h);
                 const tracked = trackBuffer.updateAndFilter(filtered, w, h);
-                const spectral = analyzeSurfaceSpectral(
-                  webcamVideo,
-                  w,
-                  h,
-                  tracked.map((d) => d.box),
-                  !liveOilScanEnabled
-                );
+                const spectral = liveOilScanEnabled
+                  ? analyzeSurfaceSpectral(
+                      webcamVideo,
+                      w,
+                      h,
+                      tracked.map((d) => d.box),
+                      true
+                    )
+                  : { oilPct: 0, algaePct: 0, algaeStatus: 'CLEAR', surfaceBoxes: [] };
                 latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
                 const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
                 maybeDispatchAutonomousCommand(analytics.recCmd);
@@ -986,13 +988,15 @@
             const preds = await cocoModel.detect(visionCanvas, 20, BOOSTED_MIN_CONF);
             const filtered = filterAndMapPredictions(preds, w, h);
             const tracked = trackBuffer.updateAndFilter(filtered, w, h);
-            const spectral = analyzeSurfaceSpectral(
-              visionCanvas,
-              w,
-              h,
-              tracked.map((d) => d.box),
-              !liveOilScanEnabled
-            );
+            const spectral = liveOilScanEnabled
+              ? analyzeSurfaceSpectral(
+                  visionCanvas,
+                  w,
+                  h,
+                  tracked.map((d) => d.box),
+                  true
+                )
+              : { oilPct: 0, algaePct: 0, algaeStatus: 'CLEAR', surfaceBoxes: [] };
             latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
             const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
             maybeDispatchAutonomousCommand(analytics.recCmd);
@@ -1330,7 +1334,16 @@
   if (oilScanToggle) {
     oilScanToggle.addEventListener('change', (e) => {
       liveOilScanEnabled = e.target.checked;
-      showToast(`Live Oil Scan: ${liveOilScanEnabled ? 'ON (Indoor/Clear Water Mode)' : 'AUTO (Water-Gated)'}`);
+      if (!liveOilScanEnabled) {
+        latestLiveDetections = latestLiveDetections.filter((d) => d.category !== 'B' && d.category !== 'C');
+        evaluateSceneAnalytics(latestLiveDetections, {
+          oilPct: 0,
+          algaePct: 0,
+          algaeStatus: 'CLEAR',
+          surfaceBoxes: [],
+        });
+      }
+      showToast(`Live Oil Scan: ${liveOilScanEnabled ? 'ON (Mostly-Water + 85% Conf)' : 'OFF'}`);
     });
   }
 
