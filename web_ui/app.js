@@ -16,6 +16,7 @@
   let activeCommand = 'S';
   let sirenActive = false;
   let autonomousMode = false;
+  let liveOilScanEnabled = false;
   let lastAutoDispatchTs = 0;
   let lastAutoCmd = 'S';
 
@@ -113,6 +114,7 @@
   const autoModeBanner = document.getElementById('autoModeBanner');
   const autoModeBannerText = document.getElementById('autoModeBannerText');
   const autoModeToggle = document.getElementById('autoModeToggle');
+  const oilScanToggle = document.getElementById('oilScanToggle');
 
   const reviewActiveBanner = document.getElementById('reviewActiveBanner');
   const reviewActiveBannerText = document.getElementById('reviewActiveBannerText');
@@ -464,6 +466,8 @@
     let rainbowPx = 0;
     let cyanSlickPx = 0;
     let tanSlickPx = 0;
+    let darkOilPx = 0;
+    let brightWaterPx = 0;
     let algaePx = 0;
     let lowerWaterPx = 0;
     let lowerValidPx = 0;
@@ -472,6 +476,7 @@
     // Bounding boxes for coarse surface detections
     const bounds = {
       oil: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
+      darkOil: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
       algae: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
     };
 
@@ -527,6 +532,19 @@
         const h = hues[i];
         const s = sats[i];
         const v = vals[i];
+
+        if (v >= 0.36) brightWaterPx++;
+
+        // Dark crude / motor oil slick on bright water (only scored if >=20% bright surrounding surface)
+        if (v >= 0.03 && v <= 0.21 && s <= 0.35) {
+          darkOilPx++;
+          if (x < bounds.darkOil.minX) bounds.darkOil.minX = x;
+          if (y < bounds.darkOil.minY) bounds.darkOil.minY = y;
+          if (x > bounds.darkOil.maxX) bounds.darkOil.maxX = x;
+          if (y > bounds.darkOil.maxY) bounds.darkOil.maxY = y;
+          bounds.darkOil.count++;
+          continue;
+        }
 
         // Skip specular glare & deep dark shadow
         if ((v > 0.96 && s < 0.1) || v < 0.16) continue;
@@ -584,7 +602,17 @@
       }
     }
 
-    const oilPctRaw = ((rainbowPx + cyanSlickPx * 0.75 + tanSlickPx * 0.7) / totalPx) * 100;
+    const brightSurfacePct = (brightWaterPx / totalPx) * 100;
+    const useDarkOil = !requireWaterGate && brightSurfacePct >= 22.0 && darkOilPx / totalPx >= 0.03 && darkOilPx / totalPx <= 0.55;
+    if (useDarkOil) {
+      if (bounds.darkOil.minX < bounds.oil.minX) bounds.oil.minX = bounds.darkOil.minX;
+      if (bounds.darkOil.minY < bounds.oil.minY) bounds.oil.minY = bounds.darkOil.minY;
+      if (bounds.darkOil.maxX > bounds.oil.maxX) bounds.oil.maxX = bounds.darkOil.maxX;
+      if (bounds.darkOil.maxY > bounds.oil.maxY) bounds.oil.maxY = bounds.darkOil.maxY;
+      bounds.oil.count += bounds.darkOil.count;
+    }
+
+    const oilPctRaw = ((rainbowPx + cyanSlickPx * 0.75 + tanSlickPx * 0.7 + (useDarkOil ? darkOilPx * 0.8 : 0)) / totalPx) * 100;
     const algaePctRaw = (algaePx / totalPx) * 100;
 
     const surfaceBoxes = [];
@@ -596,9 +624,14 @@
       const y1 = Math.round(bounds.oil.minY * scaleY);
       const x2 = Math.round(bounds.oil.maxX * scaleX);
       const y2 = Math.round(bounds.oil.maxY * scaleY);
+      const oilLabel = useDarkOil && darkOilPx > rainbowPx
+        ? 'DARK OIL SLICK'
+        : rainbowPx > cyanSlickPx && rainbowPx > tanSlickPx
+          ? 'OIL SPILL (RAINBOW SHEEN)'
+          : 'OIL SPILL / SLICK';
       surfaceBoxes.push({
         box: [x1, y1, x2, y2],
-        className: rainbowPx > cyanSlickPx && rainbowPx > tanSlickPx ? 'OIL SPILL (RAINBOW SHEEN)' : 'OIL SPILL / SLICK',
+        className: oilLabel,
         category: 'B',
         confidence: Math.min(0.95, 0.72 + oilPct / 150),
         rawClass: 'oil_spill',
@@ -916,7 +949,7 @@
                   w,
                   h,
                   tracked.map((d) => d.box),
-                  true
+                  !liveOilScanEnabled
                 );
                 latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
                 const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
@@ -989,7 +1022,7 @@
               w,
               h,
               tracked.map((d) => d.box),
-              true
+              !liveOilScanEnabled
             );
             latestLiveDetections = [...tracked, ...spectral.surfaceBoxes];
             const analytics = evaluateSceneAnalytics(latestLiveDetections, spectral);
@@ -1322,6 +1355,13 @@
     btnFlipCamera.addEventListener('click', () => {
       facingMode = facingMode === 'environment' ? 'user' : 'environment';
       if (currentSource === 'webcam') startWebcamSource();
+    });
+  }
+
+  if (oilScanToggle) {
+    oilScanToggle.addEventListener('change', (e) => {
+      liveOilScanEnabled = e.target.checked;
+      showToast(`Live Oil Scan: ${liveOilScanEnabled ? 'ON (Indoor/Clear Water Mode)' : 'AUTO (Water-Gated)'}`);
     });
   }
 
