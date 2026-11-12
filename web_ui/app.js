@@ -434,7 +434,7 @@
   }
 
   // Lightweight browser-side spectral surface analyzer (Oil Sheen, Emulsified Oil, Algae)
-  function analyzeSurfaceSpectral(sourceEl, frameW, frameH, excludeBoxes, requireWaterGate = false) {
+  function analyzeSurfaceSpectral(sourceEl, frameW, frameH, excludeBoxes, requireWaterGate = true) {
     const sw = spectralCanvas.width;
     const sh = spectralCanvas.height;
     try {
@@ -466,17 +466,13 @@
     let rainbowPx = 0;
     let cyanSlickPx = 0;
     let tanSlickPx = 0;
-    let darkOilPx = 0;
-    let brightWaterPx = 0;
     let algaePx = 0;
-    let lowerWaterPx = 0;
-    let lowerValidPx = 0;
-    const lowerYStart = Math.floor(sh * 0.40);
+    let waterLikePx = 0;
+    let validPx = 0;
 
     // Bounding boxes for coarse surface detections
     const bounds = {
       oil: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
-      darkOil: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
       algae: { minX: sw, minY: sh, maxX: 0, maxY: 0, count: 0 },
     };
 
@@ -503,54 +499,29 @@
       vals[i] = max;
     }
 
-    if (requireWaterGate) {
-      for (let y = lowerYStart; y < sh; y++) {
-        for (let x = 0; x < sw; x++) {
-          const i = y * sw + x;
-          if (excluded[i]) continue;
-          lowerValidPx++;
-          const h = hues[i];
-          const s = sats[i];
-          const v = vals[i];
-          // Marine blue, cyan, turquoise, or murky pond green
-          if (h >= 150 && h <= 245 && s >= 0.14 && v >= 0.18) {
-            lowerWaterPx++;
-          }
-        }
-      }
-      const waterRatio = lowerValidPx > 0 ? (lowerWaterPx / lowerValidPx) * 100 : 0;
-      if (waterRatio < 30.0) {
-        return { oilPct: 0, algaePct: 0, algaeStatus: 'CLEAR', surfaceBoxes: [] };
-      }
-    }
-
     for (let y = 2; y < sh - 2; y++) {
       for (let x = 2; x < sw - 2; x++) {
         const i = y * sw + x;
         if (excluded[i]) continue;
+        validPx++;
 
         const h = hues[i];
         const s = sats[i];
         const v = vals[i];
 
-        if (v >= 0.36) brightWaterPx++;
-
-        // Dark crude / motor oil slick on bright water (only scored if >=20% bright surrounding surface)
-        if (v >= 0.03 && v <= 0.21 && s <= 0.35) {
-          darkOilPx++;
-          if (x < bounds.darkOil.minX) bounds.darkOil.minX = x;
-          if (y < bounds.darkOil.minY) bounds.darkOil.minY = y;
-          if (x > bounds.darkOil.maxX) bounds.darkOil.maxX = x;
-          if (y > bounds.darkOil.maxY) bounds.darkOil.maxY = y;
-          bounds.darkOil.count++;
-          continue;
+        // Water-like region: blue/cyan/pond-green, dark water, or low-saturation clear tray water
+        const isBlueWater = h >= 145 && h <= 245 && s >= 0.12 && v >= 0.12;
+        const isDarkWater = v <= 0.35 && s <= 0.42;
+        const isLowSatWater = s <= 0.24 && v >= 0.18 && v <= 0.94;
+        if (isBlueWater || isDarkWater || isLowSatWater) {
+          waterLikePx++;
         }
 
-        // Skip specular glare & deep dark shadow
-        if ((v > 0.96 && s < 0.1) || v < 0.16) continue;
+        // Skip specular lamp glare & near-black voids from slick pixels
+        if ((v > 0.96 && s < 0.12) || v < 0.14) continue;
 
-        // Emulsified milky cyan slick (H 170-220, S 0.12-0.46, V 0.45-0.90)
-        if (h >= 172 && h <= 220 && s >= 0.12 && s <= 0.46 && v >= 0.45 && v <= 0.90) {
+        // Emulsified milky cyan slick (high-brightness milky sheen, excludes clean teal ocean)
+        if (h >= 175 && h <= 215 && s >= 0.12 && s <= 0.36 && v >= 0.58 && v <= 0.90) {
           cyanSlickPx++;
           if (x < bounds.oil.minX) bounds.oil.minX = x;
           if (y < bounds.oil.minY) bounds.oil.minY = y;
@@ -559,8 +530,8 @@
           bounds.oil.count++;
         }
 
-        // Swirling tan / brown-grey slick ribbons
-        if (h >= 20 && h <= 46 && s >= 0.16 && s <= 0.45 && v >= 0.35 && v <= 0.78) {
+        // Swirling tan / amber / brown-grey slick ribbons (cooking oil droplets or crude ribbons)
+        if (h >= 18 && h <= 52 && s >= 0.16 && s <= 0.50 && v >= 0.30 && v <= 0.82) {
           tanSlickPx++;
           if (x < bounds.oil.minX) bounds.oil.minX = x;
           if (y < bounds.oil.minY) bounds.oil.minY = y;
@@ -569,7 +540,7 @@
           bounds.oil.count++;
         }
 
-        // Local hue variance for iridescent rainbow sheen
+        // Local hue variance for iridescent rainbow sheen (thin oil film under lamp or sunlight)
         let hSum = 0;
         let hSq = 0;
         for (let dy = -2; dy <= 2; dy += 2) {
@@ -581,7 +552,7 @@
         }
         const hMean = hSum / 9;
         const hStd = Math.sqrt(Math.max(0, hSq / 9 - hMean * hMean));
-        if (hStd >= 28 && s >= 0.18 && v >= 0.2 && v <= 0.88) {
+        if (hStd >= 24 && s >= 0.16 && v >= 0.18 && v <= 0.90) {
           rainbowPx++;
           if (x < bounds.oil.minX) bounds.oil.minX = x;
           if (y < bounds.oil.minY) bounds.oil.minY = y;
@@ -590,8 +561,8 @@
           bounds.oil.count++;
         }
 
-        // Filamentous yellow-green algae bloom (H 62-145, S >= 0.32, V >= 0.25)
-        if (h >= 62 && h <= 145 && s >= 0.32 && v >= 0.25) {
+        // Filamentous yellow-green algae bloom (H 48-135, S >= 0.24, V >= 0.22)
+        if (h >= 48 && h <= 135 && s >= 0.24 && v >= 0.22) {
           algaePx++;
           if (x < bounds.algae.minX) bounds.algae.minX = x;
           if (y < bounds.algae.minY) bounds.algae.minY = y;
@@ -602,38 +573,36 @@
       }
     }
 
-    const brightSurfacePct = (brightWaterPx / totalPx) * 100;
-    const useDarkOil = !requireWaterGate && brightSurfacePct >= 22.0 && darkOilPx / totalPx >= 0.03 && darkOilPx / totalPx <= 0.55;
-    if (useDarkOil) {
-      if (bounds.darkOil.minX < bounds.oil.minX) bounds.oil.minX = bounds.darkOil.minX;
-      if (bounds.darkOil.minY < bounds.oil.minY) bounds.oil.minY = bounds.darkOil.minY;
-      if (bounds.darkOil.maxX > bounds.oil.maxX) bounds.oil.maxX = bounds.darkOil.maxX;
-      if (bounds.darkOil.maxY > bounds.oil.maxY) bounds.oil.maxY = bounds.darkOil.maxY;
-      bounds.oil.count += bounds.darkOil.count;
-    }
+    const waterRatioPct = validPx > 0 ? (waterLikePx / validPx) * 100 : 0;
+    const isMostlyWater = waterRatioPct >= 55.0;
 
-    const oilPctRaw = ((rainbowPx + cyanSlickPx * 0.75 + tanSlickPx * 0.7 + (useDarkOil ? darkOilPx * 0.8 : 0)) / totalPx) * 100;
+    const oilPctRaw = ((rainbowPx + cyanSlickPx * 0.75 + tanSlickPx * 0.75) / totalPx) * 100;
     const algaePctRaw = (algaePx / totalPx) * 100;
 
-    const surfaceBoxes = [];
-    const oilPct = oilPctRaw >= 4.0 ? Math.min(95.0, oilPctRaw) : 0.0;
-    const algaePct = algaePctRaw >= 5.0 ? Math.min(95.0, algaePctRaw) : 0.0;
+    // Calibrated confidence: reaches >= 0.85 only when frame is mostly water AND oil slick >= 2.5%
+    const oilConfidence = Math.min(
+      0.98,
+      0.72 + (isMostlyWater ? 0.08 : 0.0) + Math.min(0.18, oilPctRaw * 0.02)
+    );
 
-    if (oilPct >= 4.0 && bounds.oil.count > 40) {
+    const surfaceBoxes = [];
+    const oilFlagged = (!requireWaterGate || isMostlyWater) && oilPctRaw >= 2.5 && oilConfidence >= 0.85 && bounds.oil.count > 45;
+    const oilPct = oilFlagged ? Math.min(95.0, oilPctRaw) : 0.0;
+    const algaePct = (!requireWaterGate || isMostlyWater) && algaePctRaw >= 5.0 ? Math.min(95.0, algaePctRaw) : 0.0;
+
+    if (oilFlagged) {
       const x1 = Math.round(bounds.oil.minX * scaleX);
       const y1 = Math.round(bounds.oil.minY * scaleY);
       const x2 = Math.round(bounds.oil.maxX * scaleX);
       const y2 = Math.round(bounds.oil.maxY * scaleY);
-      const oilLabel = useDarkOil && darkOilPx > rainbowPx
-        ? 'DARK OIL SLICK'
-        : rainbowPx > cyanSlickPx && rainbowPx > tanSlickPx
-          ? 'OIL SPILL (RAINBOW SHEEN)'
-          : 'OIL SPILL / SLICK';
+      const oilLabel = rainbowPx >= cyanSlickPx && rainbowPx >= tanSlickPx
+        ? 'OIL SPILL (RAINBOW SHEEN)'
+        : 'OIL SPILL / SLICK';
       surfaceBoxes.push({
         box: [x1, y1, x2, y2],
         className: oilLabel,
         category: 'B',
-        confidence: Math.min(0.95, 0.72 + oilPct / 150),
+        confidence: Number(oilConfidence.toFixed(2)),
         rawClass: 'oil_spill',
         centroid: [(x1 + x2) / 2, (y1 + y2) / 2],
         areaRatio: ((x2 - x1) * (y2 - y1)) / Math.max(1, frameW * frameH),
