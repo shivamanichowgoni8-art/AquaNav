@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AquaNav Cloud Station | Browser Edge-AI Marine Skimmer</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <!-- Browser-Side Edge-AI (TensorFlow.js + COCO-SSD v2.2.3 via jsDelivr CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+</head>
+<body class="dark-theme">
+  <!-- Top Navigation Header -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <span class="brand-icon">⚓</span>
+      <div class="brand-text">
+        <h1>AQUANAV CLOUD STATION</h1>
+        <p class="brand-sub" id="engineStatusSub">Browser Edge-AI | Loading TensorFlow.js COCO-SSD...</p>
+      </div>
+    </div>
+
+    <div class="nav-controls">
+      <div class="status-pill" id="connectionPill">
+        <span class="status-dot"></span>
+        <span class="status-text" id="connectionText">CONNECTING</span>
+      </div>
+
+      <!-- Settings button for Custom Domain / Remote Cloud Host configuration -->
+      <button class="btn-icon" id="btnSettings" title="Configure Cloud API Base URL">
+        ⚙️
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Grid Container -->
+  <main class="dashboard-grid">
+    <!-- Left Column: Video Viewport + Static Review Gallery -->
+    <div class="main-viewport-column">
+      <section class="card viewport-card">
+        <div class="card-header">
+          <div class="viewport-title-group">
+            <h2>LIVE VISION &amp; AI HUD</h2>
+            <span class="badge" id="sourceBadge">ESP32-S3 STREAM</span>
+          </div>
+          <div class="hud-stats-row">
+            <span class="hud-tag" id="hudFps">FPS: --</span>
+            <span class="hud-tag" id="hudLatency">LAT: -- ms</span>
+            <span class="hud-tag highlight" id="hudObjects">OBJECTS: 0</span>
+          </div>
+        </div>
+
+        <!-- Video / Canvas Viewport Container -->
+        <div class="video-container" id="videoContainer">
+          <canvas id="visionCanvas" width="640" height="480"></canvas>
+          <video id="webcamVideo" autoplay playsinline muted style="display: none;"></video>
+          <div class="video-overlay-banner" id="autoModeBanner">
+            <span class="auto-indicator-dot"></span>
+            <span id="autoModeBannerText">AUTONOMOUS BRAIN ARMED</span>
+          </div>
+          <div class="video-overlay-banner review-banner" id="reviewActiveBanner" style="display: none;">
+            <span class="review-indicator-dot"></span>
+            <span id="reviewActiveBannerText">REVIEW GALLERY ACTIVE</span>
+            <button class="btn-exit-review-overlay" id="btnExitReviewOverlay">✕ Exit to Live</button>
+          </div>
+        </div>
+
+        <!-- Viewport Bottom Toolbar: Source Switcher & Auto Toggle -->
+        <div class="viewport-toolbar">
+          <div class="source-selector">
+            <label>Camera Source:</label>
+            <div class="segmented-control">
+              <button class="seg-btn active" data-src="esp32">ESP32-S3</button>
+              <button class="seg-btn" data-src="webcam">Device Cam</button>
+              <button class="seg-btn" data-src="gallery">Gallery</button>
+            </div>
+            <button class="btn-flip-cam" id="btnFlipCamera" style="display: none;" title="Switch Front / Rear Camera">
+              🔄 Rear/Front
+            </button>
+          </div>
+
+          <div class="toggle-group">
+            <label for="autoModeToggle">Autonomous Steering:</label>
+            <label class="switch">
+              <input type="checkbox" id="autoModeToggle">
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Target Category Legend -->
+        <div class="category-legend">
+          <span class="legend-pill pill-cat-a"><span class="legend-dot dot-cat-a"></span>Solid Waste</span>
+          <span class="legend-pill pill-cat-b"><span class="legend-dot dot-cat-b"></span>Oil Spill / Foam</span>
+          <span class="legend-pill pill-cat-c"><span class="legend-dot dot-cat-c"></span>Algae / Bio</span>
+          <span class="legend-pill pill-cat-d"><span class="legend-dot dot-cat-d"></span>Marine Life</span>
+          <span class="legend-pill pill-cat-e"><span class="legend-dot dot-cat-e"></span>Obstacles / Person</span>
+        </div>
+      </section>
+
+      <!-- Review Gallery & Static Image Scanner -->
+      <section class="card review-gallery-card">
+        <div class="card-header">
+          <div class="review-title-group">
+            <span class="m-icon">🔬</span>
+            <h3>REVIEW GALLERY &amp; IMAGE SCANNER</h3>
+            <span class="badge" id="reviewSampleCount">7 SCENARIOS</span>
+          </div>
+          <div class="review-header-controls">
+            <button class="btn-pill btn-exit-review" id="btnReturnToLive" style="display: none;">
+              🔴 Return to Live Feed
+            </button>
+          </div>
+        </div>
+
+        <p class="review-intro">
+          Select any real-world marine contamination scenario to run instant browser-side TensorFlow.js (COCO-SSD) + spectral surface detection with steering recommendations:
+        </p>
+
+        <!-- Scenario Pills Grid -->
+        <div class="scenarios-grid" id="scenariosGrid">
+          <!-- Populated dynamically via /api/samples -->
+        </div>
+
+        <!-- Custom Upload & Action Bar -->
+        <div class="review-upload-bar">
+          <label class="btn-upload" for="customImageInput">
+            <span>📷 Upload Custom Photo / Field Image</span>
+            <input type="file" id="customImageInput" accept="image/jpeg,image/png,image/webp" style="display: none;">
+          </label>
+          <span class="review-action-hint" id="reviewActionHint">Click any scenario above or upload an image to run browser AI inference.</span>
+        </div>
+      </section>
+    </div>
+
+    <!-- Right Column: Telemetry & Controls -->
+    <aside class="sidebar-column">
+      <!-- AI Marine Waste & Surface Detection Card -->
+      <div class="card marine-analytics-card">
+        <div class="card-header">
+          <h3>AI TARGET ANALYTICS</h3>
+          <span class="badge" id="aiModelBadge">TF.js COCO-SSD</span>
+        </div>
+
+        <!-- 3 Badges Grid -->
+        <div class="marine-badges-grid">
+          <div class="marine-badge cat-a" id="solidWasteBadgeCard">
+            <span class="m-icon">🗑️</span>
+            <div class="m-info">
+              <span class="m-title">SOLID WASTE</span>
+              <span class="m-value" id="solidWasteVal">0 items</span>
+            </div>
+          </div>
+
+          <div class="marine-badge cat-b" id="oilBadgeCard">
+            <span class="m-icon">🛢️</span>
+            <div class="m-info">
+              <span class="m-title">OIL SPILL</span>
+              <span class="m-value" id="oilSpillVal">0.0%</span>
+            </div>
+          </div>
+
+          <div class="marine-badge cat-c" id="algaeBadgeCard">
+            <span class="m-icon">🌿</span>
+            <div class="m-info">
+              <span class="m-title">ALGAE STATUS</span>
+              <span class="m-value" id="algaeStatusVal">CLEAR</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Target Lock Status Bar -->
+        <div class="target-lock-bar clear" id="targetLockBar">
+          <span class="lock-icon">🎯</span>
+          <span class="lock-text" id="targetLockText">✅ PATH CLEAR — NOMINAL NAVIGATION</span>
+        </div>
+      </div>
+
+      <!-- Failsafe Alert Banner -->
+      <div class="failsafe-card secure" id="failsafeCard">
+        <div class="failsafe-header">
+          <span class="failsafe-icon" id="failsafeIcon">🛡️</span>
+          <h3 id="failsafeTitle">PATH CLEAR — NOMINAL NAVIGATION</h3>
+        </div>
+        <p id="failsafeDesc">Corridor clear. All telemetry parameters within safe marine thresholds.</p>
+      </div>
+
+      <!-- Sensor Metrics Grid -->
+      <div class="card metrics-card">
+        <div class="card-header">
+          <h3>TELEMETRY SENSORS</h3>
+          <span class="badge" id="telemetrySourceBadge">SIMULATED</span>
+        </div>
+
+        <!-- Hull Water Leak Sensor -->
+        <div class="metric-row" id="leakRow">
+          <div class="metric-label">
+            <span class="metric-icon">💧</span>
+            <div>
+              <strong>Hull Leak Monitor</strong>
+              <small>Conductive bilge sensor</small>
+            </div>
+          </div>
+          <span class="metric-value badge-success" id="leakBadge">SECURE (DRY)</span>
+        </div>
+
+        <!-- Ultrasonic Distance Sensor -->
+        <div class="metric-row vertical">
+          <div class="metric-header-inline">
+            <div class="metric-label">
+              <span class="metric-icon">📏</span>
+              <div>
+                <strong>Bow Ultrasonic Proximity</strong>
+                <small>HC-SR04 sonar</small>
+              </div>
+            </div>
+            <span class="metric-value-large" id="distanceVal">-- cm</span>
+          </div>
+
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="distanceBar" style="width: 100%;"></div>
+          </div>
+          <div class="progress-labels">
+            <span>0 cm</span>
+            <span class="hazard-mark">Hazard &lt; 25cm</span>
+            <span>150 cm</span>
+          </div>
+        </div>
+
+        <!-- GPS & Battery Strip -->
+        <div class="telemetry-meta-strip">
+          <span id="gpsCoordVal">GPS: --, --</span>
+          <span id="batteryVal">BAT: -- V</span>
+        </div>
+      </div>
+
+      <!-- Navigation Control Pad -->
+      <div class="card nav-card">
+        <div class="card-header">
+          <h3>NAVIGATION CONTROL</h3>
+          <span class="badge" id="lastCmdBadge">STOPPED</span>
+        </div>
+
+        <!-- Virtual D-Pad (Never locked out by person detections) -->
+        <div class="dpad-container">
+          <button class="nav-btn btn-forward" id="btnForward" data-cmd="F" title="Forward (W / Up)">
+            <span>▲</span><small>FWD [W]</small>
+          </button>
+          <div class="dpad-middle-row">
+            <button class="nav-btn btn-left" id="btnLeft" data-cmd="L" title="Left (A / Left)">
+              <span>◄</span><small>LEFT [A]</small>
+            </button>
+            <button class="nav-btn btn-stop" id="btnStop" data-cmd="S" title="Emergency Stop (Space)">
+              <span>🛑</span><strong>STOP</strong><small>[SPACE]</small>
+            </button>
+            <button class="nav-btn btn-right" id="btnRight" data-cmd="R" title="Right (D / Right)">
+              <span>►</span><small>RIGHT [D]</small>
+            </button>
+          </div>
+          <button class="nav-btn btn-reverse" id="btnReverse" data-cmd="B" title="Reverse (S / Down)">
+            <span>▼</span><small>REV [S]</small>
+          </button>
+        </div>
+
+        <!-- Auxiliary Siren Trigger -->
+        <button class="btn-secondary" id="btnSiren" title="Toggle Acoustic Warning Siren">
+          🔊 Sound Acoustic Warning Siren
+        </button>
+      </div>
+
+      <!-- Session Logging & CSV Export -->
+      <div class="card export-card">
+        <div class="card-header">
+          <h3>SESSION DATA LOGGING</h3>
+          <span class="badge" id="recordCount">0 records</span>
+        </div>
+        <button class="btn-primary" id="btnExport">
+          📥 Export Telemetry to CSV
+        </button>
+        <p class="export-hint" id="toastMessage">Ready for cloud edge-AI operations.</p>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Host Settings Modal (For Custom Cloud Domain or Local Testing) -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Cloud Ground Station Settings</h3>
+        <button class="btn-close" id="btnCloseModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>By default, this dashboard talks to the same origin it is hosted on (<code>.onrender.com</code>, <code>.in</code>, <code>.com</code>, <code>.tech</code>, <code>.me</code>, or <code>localhost</code>). Optionally override the backend API URL below:</p>
+        <div class="input-group">
+          <label for="apiUrlInput">Cloud Backend Base URL:</label>
+          <input type="text" id="apiUrlInput" placeholder="https://aquanav.onrender.com">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btnResetApiUrl">Reset to Default</button>
+        <button class="btn-primary" id="btnSaveApiUrl">Save &amp; Reconnect</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
