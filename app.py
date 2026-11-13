@@ -126,8 +126,11 @@ _state: Dict[str, Any] = {
     "failsafe_active": False,
     "failsafe_reason": "",
     "last_sim_log_at": 0.0,
+    "current_sos": None,
+    "current_disaster": None,
 }
 
+_active_alerts: collections.deque = collections.deque(maxlen=25)
 _telemetry_history: collections.deque = collections.deque(maxlen=2000)
 _latest_frame_bytes: Optional[bytes] = None
 _latest_frame_ts: float = 0.0
@@ -266,12 +269,19 @@ def handle_telemetry():
                 "command": _state["current_motor_state"],
                 "siren": _state["siren_active"],
                 "auto": _state["autonomous_mode"],
+                "sos_active": bool(_state["current_sos"] is not None),
+                "disaster_active": bool(_state["current_disaster"] is not None),
             })
 
             return jsonify({
                 "command": _state["current_motor_state"],
                 "siren": _state["siren_active"],
                 "auto": _state["autonomous_mode"],
+                "sos_active": bool(_state["current_sos"] is not None),
+                "disaster_active": bool(_state["current_disaster"] is not None),
+                "latest_sos": _state["current_sos"],
+                "latest_disaster": _state["current_disaster"],
+                "emergency": _state["current_sos"] or _state["current_disaster"],
             }), 200
 
     # GET /api/telemetry
@@ -299,6 +309,8 @@ def handle_telemetry():
                     "command": _state["current_motor_state"],
                     "siren": _state["siren_active"],
                     "auto": _state["autonomous_mode"],
+                    "sos_active": bool(_state["current_sos"] is not None),
+                    "disaster_active": bool(_state["current_disaster"] is not None),
                 })
 
         frame_available = _latest_frame_bytes is not None
@@ -320,6 +332,11 @@ def handle_telemetry():
             "autonomous_mode": _state["autonomous_mode"],
             "failsafe_active": failsafe_active,
             "failsafe_reason": failsafe_reason,
+            "sos_active": bool(_state["current_sos"] is not None),
+            "disaster_active": bool(_state["current_disaster"] is not None),
+            "latest_sos": _state["current_sos"],
+            "latest_disaster": _state["current_disaster"],
+            "emergency": _state["current_sos"] or _state["current_disaster"],
             "record_count": len(_telemetry_history),
             "frame_available": frame_available,
             "frame_age_ms": frame_age_ms,
@@ -364,6 +381,137 @@ def handle_command():
             "auto": _state["autonomous_mode"],
         }
     return jsonify(resp), 200
+
+
+# ------------------------------------------------------------------------------
+# MARITIME DUAL-ALERT BROADCAST ENGINE (SOS / CASUALTY & DISASTER / HAZARD)
+# ------------------------------------------------------------------------------
+@app.route("/api/alert", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/sos", methods=["GET", "POST", "OPTIONS"])
+def handle_alert():
+    """
+    POST: Broadcasts an emergency SOS/Casualty or Marine Disaster alert to all connected stations and vessels.
+    GET : Returns active SOS & Disaster alert status and recent distress history.
+    """
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
+    now = time.time()
+
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        # Support both 'category' and legacy 'type'
+        raw_cat = str(data.get("category") or ("SOS" if request.path.endswith("/sos") else "SOS")).strip().upper()
+        category = "DISASTER" if "DISASTER" in raw_cat else "SOS"
+
+        subtype = str(data.get("subtype") or data.get("type") or (
+            "Mayday / Vessel Sinking" if category == "SOS" else "Toxic Oil / Chemical Spill"
+        )).strip()
+        message = str(data.get("message") or "").strip()
+        sender = str(data.get("sender") or "AquaNav Unit-01").strip() or "AquaNav Unit-01"
+        emergency_hold = bool(data.get("emergency_hold", category == "SOS"))
+
+        with _state_lock:
+            prev_tele = _state["esp32_telemetry"]
+            try:
+                lat = float(data.get("lat", prev_tele["lat"]))
+            except (TypeError, ValueError):
+                lat = float(prev_tele["lat"])
+
+            try:
+                lon = float(data.get("lon", prev_tele["lon"]))
+            except (TypeError, ValueError):
+                lon = float(prev_tele["lon"])
+
+            alert_id = f"{category}-{int(now * 1000)}"
+            alert = {
+                "id": alert_id,
+                "category": category,
+                "subtype": subtype,
+                "message": message,
+                "lat": round(lat, 6),
+                "lon": round(lon, 6),
+                "sender": sender,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "active": True,
+            }
+
+            if category == "SOS":
+                _state["current_sos"] = alert
+                _state["siren_active"] = True
+                if emergency_hold:
+                    _state["current_motor_state"] = "S"
+            else:
+                _state["current_disaster"] = alert
+
+            _active_alerts.appendleft(alert)
+
+            logger.warning(
+                f"[MARITIME {category} BROADCAST] {subtype} from {sender} at ({lat}, {lon}): {message}"
+            )
+
+            return jsonify({
+                "status": "ok",
+                "alert": alert,
+                "sos_active": bool(_state["current_sos"] is not None),
+                "disaster_active": bool(_state["current_disaster"] is not None),
+                "siren": _state["siren_active"],
+                "command": _state["current_motor_state"],
+            }), 201
+
+    # GET /api/alert or /api/sos
+    with _state_lock:
+        sos = _state["current_sos"]
+        disaster = _state["current_disaster"]
+        history = list(_active_alerts)
+
+    return jsonify({
+        "status": "ok",
+        "sos_active": bool(sos is not None),
+        "disaster_active": bool(disaster is not None),
+        "active": bool(sos is not None or disaster is not None),
+        "latest_sos": sos,
+        "latest_disaster": disaster,
+        "latest_alert": sos or disaster,
+        "history": history,
+    }), 200
+
+
+@app.route("/api/alert/clear", methods=["POST", "OPTIONS"])
+@app.route("/api/sos/clear", methods=["POST", "OPTIONS"])
+def clear_alert():
+    """Stands down active SOS, Disaster, or ALL emergency alerts."""
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
+    data = request.get_json(force=True, silent=True) or {}
+    raw_cat = str(data.get("category") or ("SOS" if request.path.endswith("/sos/clear") else "ALL")).strip().upper()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with _state_lock:
+        if raw_cat in {"SOS", "ALL"}:
+            if _state["current_sos"]:
+                _state["current_sos"]["active"] = False
+                _state["current_sos"]["resolved_at"] = now_iso
+            _state["current_sos"] = None
+            _state["siren_active"] = False
+
+        if raw_cat in {"DISASTER", "ALL"}:
+            if _state["current_disaster"]:
+                _state["current_disaster"]["active"] = False
+                _state["current_disaster"]["resolved_at"] = now_iso
+            _state["current_disaster"] = None
+
+        logger.info(f"[ALERT RESOLVED] Stood down alert category: {raw_cat}")
+
+        return jsonify({
+            "status": "ok",
+            "message": f"Alerts for category '{raw_cat}' stood down.",
+            "sos_active": bool(_state["current_sos"] is not None),
+            "disaster_active": bool(_state["current_disaster"] is not None),
+            "active": bool(_state["current_sos"] is not None or _state["current_disaster"] is not None),
+            "siren": _state["siren_active"],
+        }), 200
 
 
 # ------------------------------------------------------------------------------
@@ -467,6 +615,8 @@ def export_telemetry_csv():
         "command",
         "siren",
         "auto",
+        "sos_active",
+        "disaster_active",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()

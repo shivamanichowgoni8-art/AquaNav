@@ -20,6 +20,16 @@
   let lastAutoDispatchTs = 0;
   let lastAutoCmd = 'S';
 
+  // Dual Emergency Broadcast System State
+  let currentLat = 0.0;
+  let currentLon = 0.0;
+  let sosActive = false;
+  let disasterActive = false;
+  let sosAudioMuted = false;
+  let disasterAudioMuted = false;
+  let selectedSosSubtype = 'Mayday / Vessel Sinking';
+  let selectedDisasterSubtype = 'Toxic Oil / Chemical Spill';
+
   // Vision Model State
   let cocoModel = null;
   let isModelLoading = true;
@@ -160,6 +170,153 @@
   const apiUrlInput = document.getElementById('apiUrlInput');
   const btnSaveApiUrl = document.getElementById('btnSaveApiUrl');
   const btnResetApiUrl = document.getElementById('btnResetApiUrl');
+
+  // Emergency Alert Elements
+  const alertBannersContainer = document.getElementById('alertBannersContainer');
+  const sosAlertBanner = document.getElementById('sosAlertBanner');
+  const sosBannerTitle = document.getElementById('sosBannerTitle');
+  const sosBannerDetails = document.getElementById('sosBannerDetails');
+  const btnMuteSosAudio = document.getElementById('btnMuteSosAudio');
+  const btnClearSos = document.getElementById('btnClearSos');
+
+  const disasterAlertBanner = document.getElementById('disasterAlertBanner');
+  const disasterBannerTitle = document.getElementById('disasterBannerTitle');
+  const disasterBannerDetails = document.getElementById('disasterBannerDetails');
+  const btnMuteDisasterAudio = document.getElementById('btnMuteDisasterAudio');
+  const btnClearDisaster = document.getElementById('btnClearDisaster');
+
+  const btnOpenSosModal = document.getElementById('btnOpenSosModal');
+  const btnOpenDisasterModal = document.getElementById('btnOpenDisasterModal');
+
+  const sosModal = document.getElementById('sosModal');
+  const btnCloseSosModal = document.getElementById('btnCloseSosModal');
+  const btnCancelSos = document.getElementById('btnCancelSos');
+  const sosPresetsGrid = document.getElementById('sosPresetsGrid');
+  const sosSenderInput = document.getElementById('sosSenderInput');
+  const sosLatInput = document.getElementById('sosLatInput');
+  const sosLonInput = document.getElementById('sosLonInput');
+  const sosNotesInput = document.getElementById('sosNotesInput');
+  const btnTransmitSos = document.getElementById('btnTransmitSos');
+
+  const disasterModal = document.getElementById('disasterModal');
+  const btnCloseDisasterModal = document.getElementById('btnCloseDisasterModal');
+  const btnCancelDisaster = document.getElementById('btnCancelDisaster');
+  const disasterPresetsGrid = document.getElementById('disasterPresetsGrid');
+  const disasterSenderInput = document.getElementById('disasterSenderInput');
+  const disasterLatInput = document.getElementById('disasterLatInput');
+  const disasterLonInput = document.getElementById('disasterLonInput');
+  const disasterNotesInput = document.getElementById('disasterNotesInput');
+  const btnTransmitDisaster = document.getElementById('btnTransmitDisaster');
+
+  // ---------------------------------------------------------------------------
+  // WEB AUDIO API EMERGENCY SOUND GENERATORS
+  // ---------------------------------------------------------------------------
+  let audioCtx = null;
+  function getAudioContext() {
+    if (!audioCtx) {
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtxClass) {
+        audioCtx = new AudioCtxClass();
+      }
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+    return audioCtx;
+  }
+
+  function playAlertTone(freq, durationMs, type = 'sine', gainVal = 0.22) {
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(gainVal, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + durationMs / 1000);
+    } catch (_) {}
+  }
+
+  // 1. SOS Morse Code Generator: (... --- ...)
+  let sosMorseTimer = null;
+  let sosMorseActive = false;
+
+  function startSosMorseAudio() {
+    if (sosMorseActive) return;
+    sosMorseActive = true;
+
+    const pattern = [
+      // S: . . .
+      { f: 850, d: 90, wait: 90 },
+      { f: 850, d: 90, wait: 90 },
+      { f: 850, d: 90, wait: 240 },
+      // O: - - -
+      { f: 850, d: 260, wait: 90 },
+      { f: 850, d: 260, wait: 90 },
+      { f: 850, d: 260, wait: 240 },
+      // S: . . .
+      { f: 850, d: 90, wait: 90 },
+      { f: 850, d: 90, wait: 90 },
+      { f: 850, d: 90, wait: 1200 },
+    ];
+
+    let step = 0;
+    function scheduleNext() {
+      if (!sosMorseActive) return;
+      if (sosAudioMuted) {
+        sosMorseTimer = setTimeout(scheduleNext, 600);
+        return;
+      }
+      const item = pattern[step];
+      playAlertTone(item.f, item.d, 'triangle', 0.25);
+      step = (step + 1) % pattern.length;
+      sosMorseTimer = setTimeout(scheduleNext, item.d + item.wait);
+    }
+    scheduleNext();
+  }
+
+  function stopSosMorseAudio() {
+    sosMorseActive = false;
+    if (sosMorseTimer) {
+      clearTimeout(sosMorseTimer);
+      sosMorseTimer = null;
+    }
+  }
+
+  // 2. Marine Hazard / Disaster Warning Chime (520Hz -> 780Hz dual tone)
+  let disasterChimeTimer = null;
+  let disasterChimeActive = false;
+
+  function startDisasterChimeAudio() {
+    if (disasterChimeActive) return;
+    disasterChimeActive = true;
+
+    function playChimeCycle() {
+      if (!disasterChimeActive) return;
+      if (!disasterAudioMuted) {
+        playAlertTone(520, 180, 'sine', 0.22);
+        setTimeout(() => {
+          if (!disasterChimeActive || disasterAudioMuted) return;
+          playAlertTone(780, 260, 'sine', 0.22);
+        }, 160);
+      }
+      disasterChimeTimer = setTimeout(playChimeCycle, 2400);
+    }
+    playChimeCycle();
+  }
+
+  function stopDisasterChimeAudio() {
+    disasterChimeActive = false;
+    if (disasterChimeTimer) {
+      clearTimeout(disasterChimeTimer);
+      disasterChimeTimer = null;
+    }
+  }
 
   // Offscreen canvas for lightweight spectral surface analysis
   const spectralCanvas = document.createElement('canvas');
@@ -1233,11 +1390,68 @@
     }
 
     // GPS & Battery
+    if (t.lat != null) currentLat = t.lat;
+    if (t.lon != null) currentLon = t.lon;
+
     if (gpsCoordVal && t.lat != null && t.lon != null) {
       gpsCoordVal.textContent = `GPS: ${Number(t.lat).toFixed(5)}, ${Number(t.lon).toFixed(5)}`;
     }
     if (batteryVal && t.battery_v != null) {
       batteryVal.textContent = `BAT: ${Number(t.battery_v).toFixed(2)} V`;
+    }
+
+    // Sync Emergency Broadcast Alerts (Dual SOS & Disaster)
+    sosActive = Boolean(t.sos_active);
+    disasterActive = Boolean(t.disaster_active);
+
+    if (sosAlertBanner) {
+      if (sosActive) {
+        sosAlertBanner.style.display = 'flex';
+        const sosData = t.latest_sos || {};
+        if (sosBannerTitle) {
+          sosBannerTitle.textContent = `MAYDAY SOS — ${(sosData.subtype || 'VESSEL DISTRESS').toUpperCase()}`;
+        }
+        if (sosBannerDetails) {
+          const sLat = sosData.lat != null ? Number(sosData.lat).toFixed(5) : (t.lat != null ? Number(t.lat).toFixed(5) : '--');
+          const sLon = sosData.lon != null ? Number(sosData.lon).toFixed(5) : (t.lon != null ? Number(t.lon).toFixed(5) : '--');
+          const sSender = sosData.sender || 'AquaNav Unit';
+          const sMsg = sosData.message ? ` | Msg: ${sosData.message}` : '';
+          sosBannerDetails.textContent = `Origin: ${sSender} | GPS: ${sLat}, ${sLon}${sMsg}`;
+        }
+        if (!sosAudioMuted) {
+          startSosMorseAudio();
+        } else {
+          stopSosMorseAudio();
+        }
+      } else {
+        sosAlertBanner.style.display = 'none';
+        stopSosMorseAudio();
+      }
+    }
+
+    if (disasterAlertBanner) {
+      if (disasterActive) {
+        disasterAlertBanner.style.display = 'flex';
+        const disData = t.latest_disaster || {};
+        if (disasterBannerTitle) {
+          disasterBannerTitle.textContent = `MARINE DISASTER / HAZARD — ${(disData.subtype || 'HAZARD WARNING').toUpperCase()}`;
+        }
+        if (disasterBannerDetails) {
+          const dLat = disData.lat != null ? Number(disData.lat).toFixed(5) : (t.lat != null ? Number(t.lat).toFixed(5) : '--');
+          const dLon = disData.lon != null ? Number(disData.lon).toFixed(5) : (t.lon != null ? Number(t.lon).toFixed(5) : '--');
+          const dSender = disData.sender || 'AquaNav Unit';
+          const dMsg = disData.message ? ` | Hazard: ${disData.message}` : '';
+          disasterBannerDetails.textContent = `Reporting Station: ${dSender} | GPS: ${dLat}, ${dLon}${dMsg}`;
+        }
+        if (!disasterAudioMuted) {
+          startDisasterChimeAudio();
+        } else {
+          stopDisasterChimeAudio();
+        }
+      } else {
+        disasterAlertBanner.style.display = 'none';
+        stopDisasterChimeAudio();
+      }
     }
 
     if (recordCount) {
@@ -1439,6 +1653,193 @@
     showToast(`Saved API URL: ${apiBaseUrl || 'Default Origin'}`);
     switchSource(currentSource);
   });
+
+  // ---------------------------------------------------------------------------
+  // EMERGENCY BROADCAST MODALS & AUDIO CONTROLS
+  // ---------------------------------------------------------------------------
+  // 1. SOS / Casualty Modal Handlers
+  if (btnOpenSosModal && sosModal) {
+    btnOpenSosModal.addEventListener('click', () => {
+      getAudioContext();
+      if (sosLatInput) sosLatInput.value = currentLat != null ? Number(currentLat).toFixed(5) : '0.00000';
+      if (sosLonInput) sosLonInput.value = currentLon != null ? Number(currentLon).toFixed(5) : '0.00000';
+      sosModal.classList.add('open');
+    });
+  }
+
+  if (btnCloseSosModal && sosModal) {
+    btnCloseSosModal.addEventListener('click', () => sosModal.classList.remove('open'));
+  }
+  if (btnCancelSos && sosModal) {
+    btnCancelSos.addEventListener('click', () => sosModal.classList.remove('open'));
+  }
+  if (sosModal) {
+    sosModal.addEventListener('click', (e) => {
+      if (e.target === sosModal) sosModal.classList.remove('open');
+    });
+  }
+
+  if (sosPresetsGrid) {
+    sosPresetsGrid.querySelectorAll('.preset-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        sosPresetsGrid.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedSosSubtype = btn.getAttribute('data-subtype') || 'Mayday / Vessel Sinking';
+      });
+    });
+  }
+
+  if (btnTransmitSos) {
+    btnTransmitSos.addEventListener('click', async () => {
+      getAudioContext();
+      const payload = {
+        category: 'SOS',
+        subtype: selectedSosSubtype,
+        message: sosNotesInput ? sosNotesInput.value.trim() : '',
+        lat: sosLatInput ? parseFloat(sosLatInput.value) || 0.0 : 0.0,
+        lon: sosLonInput ? parseFloat(sosLonInput.value) || 0.0 : 0.0,
+        sender: (sosSenderInput && sosSenderInput.value.trim()) || 'AquaNav Unit-01',
+        emergency_hold: true,
+      };
+
+      try {
+        btnTransmitSos.disabled = true;
+        btnTransmitSos.textContent = 'TRANSMITTING SOS...';
+        await apiPost('/api/alert', payload);
+        if (sosModal) sosModal.classList.remove('open');
+        showToast('🚨 MAYDAY SOS BROADCAST TRANSMITTED!', true);
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`SOS Broadcast failed: ${err.message}`, true);
+      } finally {
+        btnTransmitSos.disabled = false;
+        btnTransmitSos.textContent = '🚨 BROADCAST SOS MAYDAY';
+      }
+    });
+  }
+
+  if (btnClearSos) {
+    btnClearSos.addEventListener('click', async () => {
+      try {
+        await apiPost('/api/alert/clear', { category: 'SOS' });
+        stopSosMorseAudio();
+        showToast('🛡️ SOS Alert stood down — all clear.');
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`Clear SOS failed: ${err.message}`, true);
+      }
+    });
+  }
+
+  if (btnMuteSosAudio) {
+    btnMuteSosAudio.addEventListener('click', () => {
+      sosAudioMuted = !sosAudioMuted;
+      if (sosAudioMuted) {
+        stopSosMorseAudio();
+        btnMuteSosAudio.textContent = '🔇 Audio MUTED';
+        btnMuteSosAudio.classList.add('muted');
+        showToast('SOS Morse Audio Muted');
+      } else {
+        btnMuteSosAudio.textContent = '🔊 Audio ON';
+        btnMuteSosAudio.classList.remove('muted');
+        getAudioContext();
+        if (sosActive) startSosMorseAudio();
+        showToast('SOS Morse Audio Unmuted');
+      }
+    });
+  }
+
+  // 2. Disaster / Hazard Modal Handlers
+  if (btnOpenDisasterModal && disasterModal) {
+    btnOpenDisasterModal.addEventListener('click', () => {
+      getAudioContext();
+      if (disasterLatInput) disasterLatInput.value = currentLat != null ? Number(currentLat).toFixed(5) : '0.00000';
+      if (disasterLonInput) disasterLonInput.value = currentLon != null ? Number(currentLon).toFixed(5) : '0.00000';
+      disasterModal.classList.add('open');
+    });
+  }
+
+  if (btnCloseDisasterModal && disasterModal) {
+    btnCloseDisasterModal.addEventListener('click', () => disasterModal.classList.remove('open'));
+  }
+  if (btnCancelDisaster && disasterModal) {
+    btnCancelDisaster.addEventListener('click', () => disasterModal.classList.remove('open'));
+  }
+  if (disasterModal) {
+    disasterModal.addEventListener('click', (e) => {
+      if (e.target === disasterModal) disasterModal.classList.remove('open');
+    });
+  }
+
+  if (disasterPresetsGrid) {
+    disasterPresetsGrid.querySelectorAll('.preset-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        disasterPresetsGrid.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedDisasterSubtype = btn.getAttribute('data-subtype') || 'Toxic Oil / Chemical Spill';
+      });
+    });
+  }
+
+  if (btnTransmitDisaster) {
+    btnTransmitDisaster.addEventListener('click', async () => {
+      getAudioContext();
+      const payload = {
+        category: 'DISASTER',
+        subtype: selectedDisasterSubtype,
+        message: disasterNotesInput ? disasterNotesInput.value.trim() : '',
+        lat: disasterLatInput ? parseFloat(disasterLatInput.value) || 0.0 : 0.0,
+        lon: disasterLonInput ? parseFloat(disasterLonInput.value) || 0.0 : 0.0,
+        sender: (disasterSenderInput && disasterSenderInput.value.trim()) || 'AquaNav Unit-01',
+        emergency_hold: false,
+      };
+
+      try {
+        btnTransmitDisaster.disabled = true;
+        btnTransmitDisaster.textContent = 'BROADCASTING WARNING...';
+        await apiPost('/api/alert', payload);
+        if (disasterModal) disasterModal.classList.remove('open');
+        showToast('⚠️ MARINE DISASTER WARNING BROADCASTED!');
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`Disaster Broadcast failed: ${err.message}`, true);
+      } finally {
+        btnTransmitDisaster.disabled = false;
+        btnTransmitDisaster.textContent = '⚠️ BROADCAST DISASTER WARNING';
+      }
+    });
+  }
+
+  if (btnClearDisaster) {
+    btnClearDisaster.addEventListener('click', async () => {
+      try {
+        await apiPost('/api/alert/clear', { category: 'DISASTER' });
+        stopDisasterChimeAudio();
+        showToast('🛡️ Disaster Warning stood down — area nominal.');
+        await fetchTelemetry();
+      } catch (err) {
+        showToast(`Clear Disaster failed: ${err.message}`, true);
+      }
+    });
+  }
+
+  if (btnMuteDisasterAudio) {
+    btnMuteDisasterAudio.addEventListener('click', () => {
+      disasterAudioMuted = !disasterAudioMuted;
+      if (disasterAudioMuted) {
+        stopDisasterChimeAudio();
+        btnMuteDisasterAudio.textContent = '🔇 Audio MUTED';
+        btnMuteDisasterAudio.classList.add('muted');
+        showToast('Disaster Chime Audio Muted');
+      } else {
+        btnMuteDisasterAudio.textContent = '🔊 Audio ON';
+        btnMuteDisasterAudio.classList.remove('muted');
+        getAudioContext();
+        if (disasterActive) startDisasterChimeAudio();
+        showToast('Disaster Chime Audio Unmuted');
+      }
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // REVIEW GALLERY LOADER & STARTUP

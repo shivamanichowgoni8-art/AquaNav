@@ -36,6 +36,39 @@
     </div>
   </header>
 
+  <!-- Global Distress / Maritime Alert Banners Container -->
+  <div class="alert-banners-container" id="alertBannersContainer">
+    <!-- 1. High-Severity SOS / Mayday Alert Banner (Crimson Red) -->
+    <div id="sosAlertBanner" class="global-alert-banner alert-banner-sos" style="display: none;">
+      <div class="banner-left-group">
+        <span class="pulsing-emg-icon">🚨</span>
+        <div class="banner-text-group">
+          <strong id="sosBannerTitle">MAYDAY SOS — CASUALTY / VESSEL IN DISTRESS</strong>
+          <span id="sosBannerDetails">Alert: Mayday / Vessel Sinking | Origin: AquaNav Unit-01 | GPS: --, --</span>
+        </div>
+      </div>
+      <div class="banner-actions-group">
+        <button id="btnMuteSosAudio" class="btn-banner-mute" title="Toggle Siren / Morse Audio">🔊 Audio ON</button>
+        <button id="btnClearSos" class="btn-banner-clear btn-clear-sos" title="Stand Down SOS Emergency">🛡️ STAND DOWN SOS</button>
+      </div>
+    </div>
+
+    <!-- 2. Marine Disaster / Hazard Warning Banner (Amber / Orange) -->
+    <div id="disasterAlertBanner" class="global-alert-banner alert-banner-disaster" style="display: none;">
+      <div class="banner-left-group">
+        <span class="pulsing-emg-icon">⚠️</span>
+        <div class="banner-text-group">
+          <strong id="disasterBannerTitle">MARINE DISASTER / HAZARD WARNING</strong>
+          <span id="disasterBannerDetails">Hazard: Toxic Oil / Chemical Spill | Origin: AquaNav Unit-01 | GPS: --, --</span>
+        </div>
+      </div>
+      <div class="banner-actions-group">
+        <button id="btnMuteDisasterAudio" class="btn-banner-mute" title="Toggle Hazard Chime Audio">🔊 Audio ON</button>
+        <button id="btnClearDisaster" class="btn-banner-clear btn-clear-disaster" title="Stand Down Disaster Warning">🛡️ STAND DOWN HAZARD</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Grid Container -->
   <main class="dashboard-grid">
     <!-- Left Column: Video Viewport + Static Review Gallery -->
@@ -277,6 +310,24 @@
         <button class="btn-secondary" id="btnSiren" title="Toggle Acoustic Warning Siren">
           🔊 Sound Acoustic Warning Siren
         </button>
+
+        <!-- Dedicated Emergency Broadcast Buttons (2-Column Grid) -->
+        <div class="emergency-buttons-grid">
+          <button class="btn-emergency-broadcast btn-broadcast-sos" id="btnOpenSosModal" title="Broadcast Mayday / Casualty Distress Alert">
+            <span class="btn-emg-icon">🚨</span>
+            <div class="btn-emg-text">
+              <strong>[!] SOS / CASUALTY</strong>
+              <small>Mayday &amp; Rescue</small>
+            </div>
+          </button>
+          <button class="btn-emergency-broadcast btn-broadcast-disaster" id="btnOpenDisasterModal" title="Broadcast Environmental Disaster or Navigation Hazard Warning">
+            <span class="btn-emg-icon">⚠️</span>
+            <div class="btn-emg-text">
+              <strong>[⚠] REPORT DISASTER</strong>
+              <small>Hazard &amp; Spill Warning</small>
+            </div>
+          </button>
+        </div>
       </div>
 
       <!-- Session Logging & CSV Export -->
@@ -310,6 +361,136 @@
       <div class="modal-footer">
         <button class="btn-secondary" id="btnResetApiUrl">Reset to Default</button>
         <button class="btn-primary" id="btnSaveApiUrl">Save &amp; Reconnect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. SOS / Casualty Broadcast Modal -->
+  <div class="modal-backdrop" id="sosModal">
+    <div class="modal-card emg-modal-card emg-modal-sos">
+      <div class="modal-header emg-modal-header emg-header-sos">
+        <div class="emg-modal-title">
+          <span class="emg-pulse-dot dot-sos"></span>
+          <h3>MAYDAY SOS / CASUALTY BROADCAST</h3>
+        </div>
+        <button class="btn-close" id="btnCloseSosModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="emg-warning-callout callout-sos">
+          🚨 <strong>HIGH-SEVERITY DISTRESS:</strong> Transmitting will broadcast an urgent Mayday/Casualty alert to all nearby vessels, ground stations, and rescue units. Emergency boat stop (S) will be engaged.
+        </p>
+
+        <label class="emg-field-label">Select Casualty / Distress Scenario:</label>
+        <div class="emg-presets-grid" id="sosPresetsGrid">
+          <button type="button" class="preset-btn active" data-subtype="Mayday / Vessel Sinking">
+            <span class="p-icon">⚓</span>
+            <span class="p-text">Mayday / Vessel Sinking</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Person Overboard / Swimmer Casualty">
+            <span class="p-icon">🏊‍♂️</span>
+            <span class="p-text">Person Overboard / Swimmer</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Medical Emergency / Severe Injury">
+            <span class="p-icon">🩹</span>
+            <span class="p-text">Medical Emergency</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Engine / Critical Power Failure">
+            <span class="p-icon">⚡</span>
+            <span class="p-text">Engine / Power Failure</span>
+          </button>
+        </div>
+
+        <div class="input-group">
+          <label for="sosSenderInput">Unit Identifier / Radio Call Sign:</label>
+          <input type="text" id="sosSenderInput" value="AquaNav Unit-01">
+        </div>
+
+        <div class="emg-coords-row">
+          <div class="input-group">
+            <label for="sosLatInput">Live Latitude:</label>
+            <input type="text" id="sosLatInput" readonly>
+          </div>
+          <div class="input-group">
+            <label for="sosLonInput">Live Longitude:</label>
+            <input type="text" id="sosLonInput" readonly>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="sosNotesInput">Emergency Situation Notes (Optional):</label>
+          <textarea id="sosNotesInput" rows="2" placeholder="e.g. Taking on water rapidly at bow; immediate assistance required"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer emg-modal-footer">
+        <button type="button" class="btn-secondary" id="btnCancelSos">Cancel</button>
+        <button type="button" class="btn-transmit btn-transmit-sos" id="btnTransmitSos">
+          🚨 BROADCAST SOS MAYDAY
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Marine Disaster / Hazard Broadcast Modal -->
+  <div class="modal-backdrop" id="disasterModal">
+    <div class="modal-card emg-modal-card emg-modal-disaster">
+      <div class="modal-header emg-modal-header emg-header-disaster">
+        <div class="emg-modal-title">
+          <span class="emg-pulse-dot dot-disaster"></span>
+          <h3>MARINE DISASTER &amp; HAZARD WARNING</h3>
+        </div>
+        <button class="btn-close" id="btnCloseDisasterModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="emg-warning-callout callout-disaster">
+          ⚠️ <strong>ENVIRONMENTAL &amp; NAVIGATION ALERT:</strong> Warns all connected ground stations and vessels of severe marine hazards, chemical slicks, or navigational obstacles in the area.
+        </p>
+
+        <label class="emg-field-label">Select Disaster / Hazard Category:</label>
+        <div class="emg-presets-grid" id="disasterPresetsGrid">
+          <button type="button" class="preset-btn active" data-subtype="Toxic Oil / Chemical Spill">
+            <span class="p-icon">🛢️</span>
+            <span class="p-text">Toxic Oil / Chemical Spill</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Severe Storm / Rough Waters">
+            <span class="p-icon">🌊</span>
+            <span class="p-text">Severe Storm / Rough Water</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Submerged Wreckage / Collision Hazard">
+            <span class="p-icon">💥</span>
+            <span class="p-text">Submerged Wreckage / Obstacle</span>
+          </button>
+          <button type="button" class="preset-btn" data-subtype="Mass Debris / Algal Bloom">
+            <span class="p-icon">🌿</span>
+            <span class="p-text">Mass Debris / Algal Bloom</span>
+          </button>
+        </div>
+
+        <div class="input-group">
+          <label for="disasterSenderInput">Unit Identifier / Reporting Station:</label>
+          <input type="text" id="disasterSenderInput" value="AquaNav Unit-01">
+        </div>
+
+        <div class="emg-coords-row">
+          <div class="input-group">
+            <label for="disasterLatInput">Live Latitude:</label>
+            <input type="text" id="disasterLatInput" readonly>
+          </div>
+          <div class="input-group">
+            <label for="disasterLonInput">Live Longitude:</label>
+            <input type="text" id="disasterLonInput" readonly>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="disasterNotesInput">Hazard Details &amp; Area Description (Optional):</label>
+          <textarea id="disasterNotesInput" rows="2" placeholder="e.g. Heavy iridescent oil slick spreading east; avoid near-field waterway"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer emg-modal-footer">
+        <button type="button" class="btn-secondary" id="btnCancelDisaster">Cancel</button>
+        <button type="button" class="btn-transmit btn-transmit-disaster" id="btnTransmitDisaster">
+          ⚠️ BROADCAST DISASTER WARNING
+        </button>
       </div>
     </div>
   </div>
