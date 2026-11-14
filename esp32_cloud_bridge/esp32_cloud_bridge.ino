@@ -30,6 +30,20 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
+// Override ESP-IDF brownout initialization to prevent spurious brownout resets on USB power
+extern "C" void esp_brownout_init(void) {
+    // Intentionally empty: completely disables ESP-IDF BOD interrupt and handler
+}
+
+extern "C" void esp_brownout_disable(void) {
+    // Intentionally empty
+}
+
+// Run before setup() to eliminate USB brownout reset during Octal PSRAM & Wi-Fi calibration
+__attribute__((constructor)) void preInitBodDisable() {
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+}
+
 // ----------------------------------------------------------------------------
 // 1. HARDWARE PIN DEFINITIONS (GOOUUU ESP32-S3-CAM OV2640)
 // ----------------------------------------------------------------------------
@@ -51,24 +65,32 @@
 #define HREF_GPIO_NUM      7
 #define PCLK_GPIO_NUM     13
 
-// Hardware Serial1 Pins for Arduino Uno UART Bridge
+// Hardware Serial Pins for Arduino Uno UART Bridge (115200 Baud matching Arduino Uno)
 // Connect ESP32 GPIO 44 (RX) -> Arduino Uno TX (Pin 1)
 // Connect ESP32 GPIO 43 (TX) -> Arduino Uno RX (Pin 0)
 #define UART_UNO_RX_PIN   44
 #define UART_UNO_TX_PIN   43
 #define UART_BAUD_RATE    115200
 
+// On GOOUUU ESP32-S3-CAM, GPIO 44 (RX) and GPIO 43 (TX) are the primary hardware UART (UART0)
+// Map Serial1 to Serial to ensure seamless unified operation with both PC Serial Monitor and Arduino Uno
+#define Serial1 Serial
+
 // ----------------------------------------------------------------------------
 // 2. CLOUD SERVER & WI-FI CONFIGURATION (PERSISTED IN NVS FLASH)
 // ----------------------------------------------------------------------------
 Preferences preferences;
 
+const char* WIFI_SSID = "YOUR_WIFI_NAME";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 String SERVER_BASE_URL = "https://aquanav.onrender.com";
-String WIFI_SSID       = "vivo T2x 5G";
-String WIFI_PASS       = "12345678";
 
-const unsigned long TELEMETRY_INTERVAL_MS = 250; // 4 Hz telemetry + steering RTT
-const unsigned long FRAME_INTERVAL_MS     = 140; // ~7 FPS QVGA cloud uplink
+// Active runtime Wi-Fi credentials (initialized from constants, auto-fallback to hotspot or NVS)
+String activeSsid = (strcmp(WIFI_SSID, "YOUR_WIFI_NAME") == 0) ? "vivo T2x 5G" : String(WIFI_SSID);
+String activePass = (strcmp(WIFI_PASS, "YOUR_WIFI_PASSWORD") == 0) ? "1234567890" : String(WIFI_PASS);
+
+const unsigned long TELEMETRY_INTERVAL_MS = 500; // 500ms telemetry POST
+const unsigned long FRAME_INTERVAL_MS     = 350; // 350ms QVGA frame uplink
 
 unsigned long lastTelemetryPostMs = 0;
 unsigned long lastFramePostMs     = 0;
@@ -116,16 +138,26 @@ esp_err_t initCamera() {
     config.frame_size   = FRAMESIZE_QVGA;
     config.jpeg_quality = 14;
     if (psramFound()) {
+        config.fb_location = CAMERA_FB_IN_PSRAM;
         config.fb_count  = 2;
         config.grab_mode = CAMERA_GRAB_LATEST;
     } else {
+        config.fb_location = CAMERA_FB_IN_DRAM;
         config.fb_count  = 1;
         config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     }
 
     esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK && psramFound()) {
+        Serial.println("[CAMERA] Retrying camera init with internal DRAM buffer...");
+        config.fb_location = CAMERA_FB_IN_DRAM;
+        config.fb_count    = 1;
+        config.grab_mode   = CAMERA_GRAB_WHEN_EMPTY;
+        err = esp_camera_init(&config);
+    }
+
     if (err != ESP_OK) {
-        Serial.printf("[CAMERA ERROR] Init failed: 0x%x\n", err);
+        Serial.printf("[CAMERA WARNING] Camera init error: 0x%x (camera optional, telemetry & UART active)\n", err);
         return err;
     }
 
@@ -161,17 +193,24 @@ void loadPreferences() {
     String savedPass = preferences.getString("wifi_pass", "");
 
     if (savedUrl.length() > 8)  SERVER_BASE_URL = normalizeBaseUrl(savedUrl);
-    if (savedSsid.length() > 0) WIFI_SSID = savedSsid;
-    if (savedPass.length() > 0) WIFI_PASS = savedPass;
+    if (savedSsid.length() > 0 && savedSsid != "YOUR_WIFI_NAME") activeSsid = savedSsid;
+    if (savedPass.length() > 0 && savedPass != "YOUR_WIFI_PASSWORD" && savedPass != "12345678") {
+        activePass = savedPass;
+    } else {
+        preferences.putString("wifi_ssid", activeSsid);
+        preferences.putString("wifi_pass", activePass);
+    }
 
     Serial.println("[CONFIG] Active Cloud Server: " + SERVER_BASE_URL);
-    Serial.println("[CONFIG] Active Wi-Fi SSID  : " + WIFI_SSID);
+    Serial.println("[CONFIG] Active Wi-Fi SSID  : " + activeSsid);
 }
 
 void connectWiFi() {
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID.c_str(), WIFI_PASS.c_str());
-    Serial.printf("[WIFI] Connecting to '%s'", WIFI_SSID.c_str());
+    WiFi.setAutoReconnect(true);
+    WiFi.setSleep(false);
+    WiFi.begin(activeSsid.c_str(), activePass.c_str());
+    Serial.printf("[WIFI] Connecting to '%s'", activeSsid.c_str());
 
     unsigned long startWait = millis();
     while (WiFi.status() != WL_CONNECTED && (millis() - startWait < 12000)) {
@@ -181,7 +220,7 @@ void connectWiFi() {
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[WIFI] Connected! IP: " + WiFi.localIP().toString());
+        Serial.println("[WIFI] WiFi Connected! IP: " + WiFi.localIP().toString());
     } else {
         Serial.println("[WIFI] Connection pending — will retry automatically in loop.");
     }
@@ -205,12 +244,12 @@ void handleUsbSerialCommands() {
                 String creds = usbLineBuffer.substring(9);
                 int commaIdx = creds.indexOf(',');
                 if (commaIdx > 0) {
-                    WIFI_SSID = creds.substring(0, commaIdx);
-                    WIFI_PASS = creds.substring(commaIdx + 1);
-                    WIFI_SSID.trim();
-                    WIFI_PASS.trim();
-                    preferences.putString("wifi_ssid", WIFI_SSID);
-                    preferences.putString("wifi_pass", WIFI_PASS);
+                    activeSsid = creds.substring(0, commaIdx);
+                    activePass = creds.substring(commaIdx + 1);
+                    activeSsid.trim();
+                    activePass.trim();
+                    preferences.putString("wifi_ssid", activeSsid);
+                    preferences.putString("wifi_pass", activePass);
                     Serial.println("[NVS SAVED] Wi-Fi updated. Reconnecting...");
                     WiFi.disconnect();
                     connectWiFi();
@@ -219,7 +258,7 @@ void handleUsbSerialCommands() {
                 }
             } else if (usbLineBuffer.equalsIgnoreCase("GET_CONFIG")) {
                 Serial.println("[CONFIG] SERVER_BASE_URL = " + SERVER_BASE_URL);
-                Serial.println("[CONFIG] WIFI_SSID       = " + WIFI_SSID);
+                Serial.println("[CONFIG] WIFI_SSID       = " + activeSsid);
                 Serial.println("[CONFIG] IP              = " + WiFi.localIP().toString());
             }
             usbLineBuffer = "";
@@ -345,16 +384,21 @@ void postTelemetryAndSyncCommands() {
 
     int code = http.POST((uint8_t*)jsonBody, strlen(jsonBody));
     if (code == HTTP_CODE_OK) {
+        Serial.printf("[CLOUD TELEMETRY] POST /api/telemetry -> %d OK\n", code);
         String resp = http.getString();
         String cmdStr = extractJsonString(resp, "\"command\"", "S");
-        bool sirenOn  = extractJsonBool(resp, "\"siren\"", false);
+        bool sirenOn    = extractJsonBool(resp, "\"siren\"", false);
+        bool sosOn      = extractJsonBool(resp, "\"sos_active\"", false);
+        bool disasterOn = extractJsonBool(resp, "\"disaster_active\"", false);
 
         if (cmdStr.length() >= 1) {
             forwardCommandToUno(cmdStr.charAt(0));
         }
-        forwardSirenToUno(sirenOn);
+        forwardSirenToUno(sirenOn || sosOn || disasterOn);
     } else if (code < 0) {
         Serial.printf("[CLOUD TELEMETRY] HTTP error: %s\n", http.errorToString(code).c_str());
+    } else {
+        Serial.printf("[CLOUD TELEMETRY] POST /api/telemetry -> %d\n", code);
     }
     http.end();
 }
@@ -390,6 +434,8 @@ void postCameraFrame() {
 // ----------------------------------------------------------------------------
 void setup() {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    setCpuFrequencyMhz(160); // Low-power 160MHz to prevent USB cable brownouts
+    delay(100);
 
     Serial.begin(115200);
     delay(400);
@@ -397,6 +443,7 @@ void setup() {
     Serial.println("  AquaNav ESP32-S3 Cloud Bridge (Domain-Agnostic)");
     Serial.println("  Commands: SET_URL:<url> | SET_WIFI:ssid,pass | GET_CONFIG");
     Serial.println("=======================================================");
+    Serial.flush();
 
     Serial1.begin(UART_BAUD_RATE, SERIAL_8N1, UART_UNO_RX_PIN, UART_UNO_TX_PIN);
 
@@ -416,8 +463,10 @@ void loop() {
         static unsigned long lastReconnectAttempt = 0;
         if (now - lastReconnectAttempt > 10000) {
             lastReconnectAttempt = now;
-            Serial.println("[WIFI] Reconnecting...");
-            WiFi.begin(WIFI_SSID.c_str(), WIFI_PASS.c_str());
+            Serial.println("[WIFI] Reconnecting to " + activeSsid + "...");
+            WiFi.disconnect();
+            delay(100);
+            WiFi.begin(activeSsid.c_str(), activePass.c_str());
         }
         delay(10);
         return;
