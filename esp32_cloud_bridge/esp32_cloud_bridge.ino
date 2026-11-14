@@ -81,13 +81,13 @@ __attribute__((constructor)) void preInitBodDisable() {
 // ----------------------------------------------------------------------------
 Preferences preferences;
 
-const char* WIFI_SSID = "YOUR_WIFI_NAME";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = "iphone(2)";
+const char* WIFI_PASS = "1234567890";
 String SERVER_BASE_URL = "https://aquanav.onrender.com";
 
 // Active runtime Wi-Fi credentials (initialized from constants, auto-fallback to hotspot or NVS)
-String activeSsid = (strcmp(WIFI_SSID, "YOUR_WIFI_NAME") == 0) ? "vivo T2x 5G" : String(WIFI_SSID);
-String activePass = (strcmp(WIFI_PASS, "YOUR_WIFI_PASSWORD") == 0) ? "1234567890" : String(WIFI_PASS);
+String activeSsid = "iphone(2)";
+String activePass = "1234567890";
 
 const unsigned long TELEMETRY_INTERVAL_MS = 500; // 500ms telemetry POST
 const unsigned long FRAME_INTERVAL_MS     = 350; // 350ms QVGA frame uplink
@@ -134,22 +134,25 @@ esp_err_t initCamera() {
     config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
 
-    // QVGA (320x240) keeps frame size ~8-15KB for smooth Wi-Fi -> Cloud relay
-    config.frame_size   = FRAMESIZE_QVGA;
-    config.jpeg_quality = 14;
     if (psramFound()) {
-        config.fb_location = CAMERA_FB_IN_PSRAM;
-        config.fb_count  = 2;
-        config.grab_mode = CAMERA_GRAB_LATEST;
+        config.frame_size   = FRAMESIZE_QVGA;
+        config.jpeg_quality = 14;
+        config.fb_location  = CAMERA_FB_IN_PSRAM;
+        config.fb_count     = 2;
+        config.grab_mode    = CAMERA_GRAB_LATEST;
     } else {
-        config.fb_location = CAMERA_FB_IN_DRAM;
-        config.fb_count  = 1;
-        config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+        Serial.println("[CAMERA] PSRAM not detected, using internal DRAM QQVGA (160x120)...");
+        config.frame_size   = FRAMESIZE_QQVGA;
+        config.jpeg_quality = 16;
+        config.fb_location  = CAMERA_FB_IN_DRAM;
+        config.fb_count     = 1;
+        config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
     }
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK && psramFound()) {
-        Serial.println("[CAMERA] Retrying camera init with internal DRAM buffer...");
+        Serial.println("[CAMERA] Retrying camera init with internal DRAM QQVGA buffer...");
+        config.frame_size  = FRAMESIZE_QQVGA;
         config.fb_location = CAMERA_FB_IN_DRAM;
         config.fb_count    = 1;
         config.grab_mode   = CAMERA_GRAB_WHEN_EMPTY;
@@ -226,51 +229,6 @@ void connectWiFi() {
     }
 }
 
-void handleUsbSerialCommands() {
-    while (Serial.available() > 0) {
-        char c = (char)Serial.read();
-        if (c == '\n' || c == '\r') {
-            usbLineBuffer.trim();
-            if (usbLineBuffer.startsWith("SET_URL:")) {
-                String newUrl = normalizeBaseUrl(usbLineBuffer.substring(8));
-                if (newUrl.startsWith("http://") || newUrl.startsWith("https://")) {
-                    SERVER_BASE_URL = newUrl;
-                    preferences.putString("server_url", SERVER_BASE_URL);
-                    Serial.println("[NVS SAVED] SERVER_BASE_URL = " + SERVER_BASE_URL);
-                } else {
-                    Serial.println("[ERROR] URL must start with https:// or http://");
-                }
-            } else if (usbLineBuffer.startsWith("SET_WIFI:")) {
-                String creds = usbLineBuffer.substring(9);
-                int commaIdx = creds.indexOf(',');
-                if (commaIdx > 0) {
-                    activeSsid = creds.substring(0, commaIdx);
-                    activePass = creds.substring(commaIdx + 1);
-                    activeSsid.trim();
-                    activePass.trim();
-                    preferences.putString("wifi_ssid", activeSsid);
-                    preferences.putString("wifi_pass", activePass);
-                    Serial.println("[NVS SAVED] Wi-Fi updated. Reconnecting...");
-                    WiFi.disconnect();
-                    connectWiFi();
-                } else {
-                    Serial.println("[ERROR] Format: SET_WIFI:SSID,PASSWORD");
-                }
-            } else if (usbLineBuffer.equalsIgnoreCase("GET_CONFIG")) {
-                Serial.println("[CONFIG] SERVER_BASE_URL = " + SERVER_BASE_URL);
-                Serial.println("[CONFIG] WIFI_SSID       = " + activeSsid);
-                Serial.println("[CONFIG] IP              = " + WiFi.localIP().toString());
-            }
-            usbLineBuffer = "";
-        } else if (usbLineBuffer.length() < 200) {
-            usbLineBuffer += c;
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// 5. ARDUINO UNO UART TELEMETRY PARSER & COMMAND FORWARDER
-// ----------------------------------------------------------------------------
 float extractJsonFloat(const String& json, const char* key, float fallback) {
     int keyIdx = json.indexOf(key);
     if (keyIdx < 0) return fallback;
@@ -305,21 +263,60 @@ String extractJsonString(const String& json, const char* key, String fallback) {
     return json.substring(q1 + 1, q2);
 }
 
-void readUnoUartTelemetry() {
-    while (Serial1.available() > 0) {
-        char c = (char)Serial1.read();
+void processIncomingSerialLine(String line) {
+    line.trim();
+    if (line.length() == 0) return;
+
+    if (line.startsWith("SET_URL:")) {
+        String newUrl = normalizeBaseUrl(line.substring(8));
+        if (newUrl.startsWith("http://") || newUrl.startsWith("https://")) {
+            SERVER_BASE_URL = newUrl;
+            preferences.putString("server_url", SERVER_BASE_URL);
+            Serial.println("[NVS SAVED] SERVER_BASE_URL = " + SERVER_BASE_URL);
+        } else {
+            Serial.println("[ERROR] URL must start with https:// or http://");
+        }
+    } else if (line.startsWith("SET_WIFI:")) {
+        String creds = line.substring(9);
+        int commaIdx = creds.indexOf(',');
+        if (commaIdx > 0) {
+            activeSsid = creds.substring(0, commaIdx);
+            activePass = creds.substring(commaIdx + 1);
+            activeSsid.trim();
+            activePass.trim();
+            preferences.putString("wifi_ssid", activeSsid);
+            preferences.putString("wifi_pass", activePass);
+            Serial.println("[NVS SAVED] Wi-Fi updated: " + activeSsid + ". Reconnecting...");
+            WiFi.disconnect();
+            connectWiFi();
+        } else {
+            Serial.println("[ERROR] Format: SET_WIFI:SSID,PASSWORD");
+        }
+    } else if (line.equalsIgnoreCase("GET_CONFIG")) {
+        Serial.println("[CONFIG] SERVER_BASE_URL = " + SERVER_BASE_URL);
+        Serial.println("[CONFIG] WIFI_SSID       = " + activeSsid);
+        Serial.println("[CONFIG] IP              = " + WiFi.localIP().toString());
+        Serial.println("[CONFIG] STATUS          = " + String(WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED"));
+    } else if (line.startsWith("{") && line.endsWith("}")) {
+        cachedDistanceCm = extractJsonFloat(line, "\"distance_cm\"", cachedDistanceCm);
+        cachedWaterLeak  = extractJsonBool(line, "\"water_leak\"", cachedWaterLeak);
+        cachedLat        = extractJsonFloat(line, "\"lat\"", cachedLat);
+        cachedLon        = extractJsonFloat(line, "\"lon\"", cachedLon);
+        cachedBatteryV   = extractJsonFloat(line, "\"battery_v\"", cachedBatteryV);
+        Serial.println("[UNO TELEMETRY] " + line);
+    }
+}
+
+void readUnifiedSerial() {
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
         if (c == '\n' || c == '\r') {
-            uartLineBuffer.trim();
-            if (uartLineBuffer.startsWith("{") && uartLineBuffer.endsWith("}")) {
-                cachedDistanceCm = extractJsonFloat(uartLineBuffer, "\"distance_cm\"", cachedDistanceCm);
-                cachedWaterLeak  = extractJsonBool(uartLineBuffer, "\"water_leak\"", cachedWaterLeak);
-                cachedLat        = extractJsonFloat(uartLineBuffer, "\"lat\"", cachedLat);
-                cachedLon        = extractJsonFloat(uartLineBuffer, "\"lon\"", cachedLon);
-                cachedBatteryV   = extractJsonFloat(uartLineBuffer, "\"battery_v\"", cachedBatteryV);
+            if (usbLineBuffer.length() > 0) {
+                processIncomingSerialLine(usbLineBuffer);
+                usbLineBuffer = "";
             }
-            uartLineBuffer = "";
-        } else if (uartLineBuffer.length() < 240) {
-            uartLineBuffer += c;
+        } else if (usbLineBuffer.length() < 240) {
+            usbLineBuffer += c;
         }
     }
 }
@@ -453,8 +450,7 @@ void setup() {
 }
 
 void loop() {
-    handleUsbSerialCommands();
-    readUnoUartTelemetry();
+    readUnifiedSerial();
 
     unsigned long now = millis();
 
